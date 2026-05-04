@@ -46,17 +46,40 @@ Then in any Claude Code session, run:
 /learn-my-writing-style
 ```
 
-It asks twelve quick questions, summarizes what it captured, and writes everything once you say `yes`. After that, `/style-correct` is available whenever you want to teach Claude a new correction.
+The skill takes the **channel-first** path when MCPs are mounted: it derives your voice from prose you've actually written, then asks only the profile questions that can't be inferred. If no MCPs are mounted (or you decline), it falls back to a short interview.
 
-## What the interview asks
+After that, `/style-correct` is available whenever you want to teach Claude a new correction.
 
-**Profile (5):** name and title, organization, work + personal email, one-sentence day-to-day, two or three guiding principles.
+## How voice is derived
 
-**Voice base layer (4):** 3-4 tone adjectives, 2-3 writers/publications you want to sound like, AI tells to ban (defaults plus your additions), filler words to cut.
+The skill checks for these MCPs and pulls authored content from each one that's available, with your consent:
 
-**Context layers (3, optional):** Slack voice, email voice, long-form doc voice.
+| Channel | What gets pulled | What gets derived |
+| --- | --- | --- |
+| **Gmail** | Your 10 most recent sent emails (signatures and quoted text stripped) | Email tone, greetings, sign-offs, paragraph length |
+| **Google Drive** | The 5 most recently edited docs you own | Long-form structure, headers, citation style, scannability |
+| **Slack** | Your 20 most recent messages across channels | Slack habits: opens, length, lowercase starts, emoji usage |
+| **Confluence** | The 3 most recent pages you authored | Long-form, formal documentation tone |
+| **GitHub** (if a `gh` CLI or GitHub MCP is mounted) | Your last 10 PR descriptions and substantive commit messages | Technical voice, imperative phrasing |
 
-Skipped questions become placeholder comments in the file (`<!-- Fill this in after a week of real usage. -->`), not empty sections.
+From the samples, the skill extracts: 3-4 tone adjectives, 2-3 exemplar styles (if a recognizable match exists), channel-specific habits, AI tells you already avoid, and filler words that recur. You see all of it tagged as **derived from samples** before anything is written, with 1-2 short verbatim quotes per inference, and you can correct or replace any of it.
+
+The skill **never stores raw fetched content**. Only the derived attributes and short quotes go into the memory files.
+
+If no MCPs are mounted, the skill asks the original interview questions (3-4 tone adjectives, 2-3 exemplars, AI tells, filler words, optional Slack/email/long-form notes) instead.
+
+## Profile questions (always asked)
+
+Some things can't be derived from samples and are always asked:
+
+- Name and title
+- Organization (or "none")
+- Work and personal email (optional)
+- One-sentence day-to-day
+- Two or three guiding principles
+- AI tells to ban beyond the defaults
+
+Skipped optional questions become placeholder comments in the file (`<!-- Fill this in after a week of real usage. -->`), not empty sections.
 
 ## How the hook works
 

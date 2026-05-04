@@ -1,11 +1,11 @@
 ---
 name: learn-my-writing-style
-description: Interactive onboarding that interviews you, builds your voice/style profile, writes your Claude Code memory files, and wires the style-check Stop hook so future responses respect your tone. Invoke with /learn-my-writing-style. Safe to rerun (prompts before overwriting).
+description: Onboarding that derives your writing voice from real authored prose (Gmail, Slack, Drive, Confluence, GitHub via mounted MCPs) when available, falls back to a short interview when not, writes your Claude Code memory files, and wires the style-check Stop hook so future responses respect your tone. Invoke with /learn-my-writing-style. Safe to rerun (prompts before overwriting).
 ---
 
 # /learn-my-writing-style
 
-Interview the user, build their Claude Code personal layer from the answers, and wire up the style-check enforcement hook. Designed so anyone can run this once after cloning a Claude Code config scaffold.
+Build the user's Claude Code personal layer from real prose they've written (channel-first) or a short interview (fallback), then wire up the style-check enforcement hook. Designed so anyone can run this once after cloning a Claude Code config scaffold.
 
 ## What this produces
 
@@ -24,36 +24,99 @@ Check whether any memory files already exist there. If yes, ask the user: **Repl
 
 Also capture the user's home path (`$HOME`) for writing the `style_check.py` command in `settings.json`.
 
-## Step 1: interview
+## Step 1: build the voice profile
 
-Ask one question per turn. Keep each prompt short. After all answers are in, read them back as a summary and wait for `yes` before writing files.
+This step has two paths. Always prefer **channel-first**: derive the voice from prose the user has actually written. Fall back to **interview-only** if no MCPs expose authored content or the user declines.
 
-### Profile (5)
+### 1a. Survey channels
+
+Look at the available tools. A channel is "available" if its MCP tools are present in this session. Cover at minimum:
+
+- **Gmail:** sent messages (look for tools like `search_threads`, `get_thread`).
+- **Google Drive:** docs the user authored (look for `search_files`, `read_file_content`, `list_recent_files`, `get_file_metadata`).
+- **Slack:** messages the user posted (look for `slack_search_*`, `slack_search_users`).
+- **Confluence:** pages the user wrote (look for `searchConfluenceUsingCql`, `getConfluencePage`).
+- **GitHub:** PR descriptions and substantive commit messages (if a `gh` CLI or GitHub MCP is mounted).
+
+Build a list of channels you can actually pull from. Skip anything missing.
+
+### 1b. Ask consent
+
+Tell the user exactly which channels you can pull from and what you'll fetch. Example:
+
+> I can derive your voice from real samples instead of asking adjective questions. Available now:
+> - **Gmail:** your 10 most recent sent emails
+> - **Slack:** your 20 most recent messages
+> - **Drive:** the 5 most recently edited docs you own
+>
+> Pull from all? [yes / pick subset / no, do an interview instead]
+
+If the user picks "no" or no channels are available, jump to **1f (interview fallback)** and skip 1c through 1e.
+
+### 1c. Pull samples (only from approved channels)
+
+For each approved channel, fetch authored prose. Default queries:
+
+| Channel | What to fetch |
+| --- | --- |
+| Gmail | Search `from:me` (resolve the user's address first if needed). Take the 10 most recent threads. Strip signatures, quoted reply text, and disclaimers; keep only what they wrote. |
+| Drive | List files where the user is owner, sorted by last-modified desc. Read the 5 most recent. Skip files under ~200 chars (likely not prose). |
+| Slack | Look up the user with `slack_search_users`. Search messages where they're the author across channels. Take the 20 most recent substantive messages (skip one-word reactions and link-only posts). |
+| Confluence | CQL `creator = currentUser() ORDER BY created DESC`. Read the 3 most recent pages. |
+| GitHub | List PRs the user authored (last 10), pull the descriptions; pull the last 10 substantive commit messages. |
+
+If a channel errors or returns nothing, note the failure and continue. **Never block the flow on one source.** Total fetched content should stay under ~20k characters; truncate per-item if needed.
+
+### 1d. Derive voice attributes
+
+From the collected samples, extract:
+
+- **Tone adjectives (3-4):** describe the voice. Be specific: "direct", "dry", "warm", "analytical", "blunt".
+- **Exemplar styles (2-3):** writers, publications, or recognizable styles the prose resembles. If nothing fits cleanly, leave blank rather than invent.
+- **Channel-specific habits:**
+  - Slack: typical opens, message length, lowercase starts, emoji usage, sign-offs.
+  - Email: greeting style, sign-off, formality, paragraph length.
+  - Long-form: structure (headers, bullets, tables), citation style, scannability.
+- **AI tells the user already avoids:** patterns absent from the samples that the hook should keep enforcing (em dashes, `Certainly!`, etc.).
+- **Filler words that recur:** repeated low-content words or hedges to ban (e.g., "really", "just", "basically").
+- **Verbatim phrases (2-3 short, total under 500 characters):** quote the user's own prose so the analysis is grounded.
+
+### 1e. Profile questions (always asked; can't derive)
+
+Ask, one per turn:
 
 1. **Name and title?** (e.g. "Jane Smith, Senior Product Designer")
 2. **Company or organization?** (Or "none" for personal/solo.)
 3. **Work email?** (Optional.) **Personal email?** (Optional.)
 4. **One sentence: what do you actually do day to day?**
 5. **Two or three principles or goals that guide your work?** (Short phrases, not essays.)
+6. **AI tells to block beyond the defaults?** Defaults: em dashes, `delve`, `utilize`, `Certainly!`, `Absolutely!`, `I'd be happy to`, `In today's fast-paced`. Ask **keep all defaults**, **drop any** (which), and **add any** new patterns. If 1d already surfaced specific tells the user uses, mention them and ask whether to ban or keep.
 
-### Voice, base layer (4)
+Skip any question whose answer is already obvious from the samples.
 
-6. **Pick 3-4 adjectives that describe the voice you want in writing.** Examples: approachable, authoritative, prudent, efficient, warm, analytical, direct, dry.
-7. **Name 2-3 writers or publications whose tone you'd like to sound like.** Examples: Isaac Asimov, The Economist, a specific blog or author.
-8. **AI tells to block?** Defaults: em dashes, `delve`, `utilize`, `Certainly!`, `Absolutely!`, `I'd be happy to`, `In today's fast-paced`. Ask if they want to **keep all defaults**, **drop any** (which), and **add any** new patterns (literal words or phrases).
-9. **Filler words you catch yourself using and want cut?** (Optional; e.g. `basically`, `really`, `just`.)
+### 1f. Interview fallback (only if 1c was skipped)
 
-### Context layers, optional (3)
+Ask the full voice interview in addition to the profile questions:
 
-10. **Slack voice notes?** (e.g. casual, lowercase starts, emoji, short. Or skip.)
-11. **Email voice notes?** (e.g. warm openings, sign-off template. Or skip.)
-12. **Long-form doc voice notes?** (e.g. structured, scannable headers, tables for multi-dimensional data, citations. Or skip.)
+- **Pick 3-4 adjectives that describe the voice you want in writing.** Examples: approachable, authoritative, prudent, efficient, warm, analytical, direct, dry.
+- **Name 2-3 writers or publications whose tone you'd like to sound like.** Examples: Isaac Asimov, The Economist, a specific blog or author.
+- **Filler words you catch yourself using and want cut?** (Optional; e.g. `basically`, `really`, `just`.)
+- **Slack voice notes?** (e.g. casual, lowercase starts, emoji, short. Or skip.)
+- **Email voice notes?** (e.g. warm openings, sign-off template. Or skip.)
+- **Long-form doc voice notes?** (e.g. structured, scannable headers, tables for multi-dimensional data, citations. Or skip.)
 
 Answers that are skipped get placeholder comments in the file (so the user can fill in later), not empty sections.
 
 ## Step 2: confirm
 
-Summarize back what you captured (profile facts in one block, voice adjectives + exemplars, final banned-pattern list, filler words, which context layers will get content). Ask for `yes` / changes before writing.
+Summarize back what you captured. Mark **how each item was sourced** so the user can correct anything that was misderived:
+
+- Profile facts (name, title, org, day-to-day, principles): from the interview.
+- Voice adjectives, exemplars, channel habits, filler words: tag each as **derived from samples** or **from interview** depending on path 1c/1d vs 1f.
+- Final banned-pattern list: defaults plus user additions.
+- For derived items, include 1-2 short verbatim quotes that supported the inference.
+
+Ask for `yes` / changes before writing. Common corrections: "the tone adjective is wrong," "drop that exemplar," "add `really` to filler." Apply edits and re-confirm if anything substantive changed.
 
 ## Step 3: write the memory files
 
@@ -225,7 +288,8 @@ Tell the user:
 2. Which banned patterns are now enforced (read back the final list).
 3. **The Stop hook may not fire until they open `/hooks` once or restart Claude Code.** The settings watcher does not always pick up newly-added hook blocks mid-session.
 4. They can edit `~/.claude/hooks/style_check_config.json` any time to add or remove rules without touching `style_check.py`.
-5. (Optional, only if they ask) Offer to set up git and a private GitHub repo to sync `~/.claude/` across machines.
+5. **Companion command:** `/style-correct` lets them turn any future manual edit into a permanent banned-phrase rule.
+6. (Optional, only if they ask) Offer to set up git and a private GitHub repo to sync `~/.claude/` across machines.
 
 ## Rerun behavior
 
@@ -234,6 +298,8 @@ If the user invokes `/learn-my-writing-style` again later, Step 0's existence ch
 ## Do not
 
 - Do not write any file without first showing the summary and getting `yes`.
+- Do not pull from any channel without explicit user consent in 1b.
+- Do not store raw fetched content; only the derived attributes and 2-3 short quotes go anywhere persistent.
 - Do not run `git`, `gh`, or any network command as part of onboarding unless the user asks.
 - Do not overwrite `~/.claude/settings.json` wholesale; always merge.
 - Do not touch `~/.claude/CLAUDE.md` from inside this skill. If the user wants global directives, point them at their new `user_writing_style.md` and let them compose CLAUDE.md deliberately later.
