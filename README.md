@@ -1,18 +1,26 @@
 # learn-my-writing-style
 
-A Claude Code skill that interviews you and teaches Claude your writing voice.
+A Claude Code skill that interviews you, captures your writing voice, and wires a Stop hook so future responses get blocked when they violate your guide before you ever see them.
 
-It captures who you are, the tone you write in, and the AI tells you want banned. Then it wires a Stop hook that blocks responses that violate your guide before you ever see them.
+## Why
+
+Out of the box, Claude leans on em dashes, "Certainly!", "Let me explain...", and other tells that flatten its prose. Memory files alone are advisory. This skill pairs a voice profile with a deterministic check that runs on every assistant turn, so the model fixes violations before the response lands.
 
 ## What you get
 
 After running `/learn-my-writing-style` once:
 
-- A profile, voice guide, and (optional) org file under `~/.claude/projects/<your-project>/memory/`
-- `~/.claude/hooks/style_check_config.json` with the banned patterns you chose
-- A Stop hook entry in `~/.claude/settings.json` that runs `style_check.py` after every assistant turn
+| Path | Purpose |
+| --- | --- |
+| `~/.claude/projects/<sanitized-cwd>/memory/user_profile.md` | Role, day-to-day, guiding principles |
+| `~/.claude/projects/<sanitized-cwd>/memory/user_writing_style.md` | Voice guide: anti-patterns, tone adjectives, exemplars, Slack/email/long-form layers |
+| `~/.claude/projects/<sanitized-cwd>/memory/user_org.md` | Organization context (only if you named one) |
+| `~/.claude/projects/<sanitized-cwd>/memory/MEMORY.md` | Index linking the files above |
+| `~/.claude/hooks/style_check.py` | The Stop hook script |
+| `~/.claude/hooks/style_check_config.json` | Banned patterns the hook enforces |
+| `~/.claude/settings.json` | Stop hook entry pointing to `style_check.py` (merged, not overwritten) |
 
-If a response contains an em dash or any banned pattern (`delve`, `utilize`, `Certainly!`, etc.), the hook blocks the turn and tells the model to revise.
+`<sanitized-cwd>` is your current working directory with `/` replaced by `-`. So `/Users/jane/work` becomes `-Users-jane-work`. That scopes the memory to the project you ran the skill in.
 
 ## Install
 
@@ -34,17 +42,118 @@ Then in any Claude Code session, run:
 
 It asks twelve quick questions, summarizes what it captured, and writes everything once you say `yes`.
 
-## Customizing later
+## What the interview asks
 
-`~/.claude/hooks/style_check_config.json` is plain JSON. Add or remove banned regexes any time without touching the Python.
+**Profile (5):** name and title, organization, work + personal email, one-sentence day-to-day, two or three guiding principles.
 
-To rerun the interview, invoke `/learn-my-writing-style` again. By default it skips files that already exist, so deleting a single memory file lets you refresh just that one.
+**Voice base layer (4):** 3-4 tone adjectives, 2-3 writers/publications you want to sound like, AI tells to ban (defaults plus your additions), filler words to cut.
+
+**Context layers (3, optional):** Slack voice, email voice, long-form doc voice.
+
+Skipped questions become placeholder comments in the file (`<!-- Fill this in after a week of real usage. -->`), not empty sections.
 
 ## How the hook works
 
-`style_check.py` reads the transcript JSONL, finds the last assistant message, and scans its text for em dashes (Unicode `U+2014`) and each entry in `banned_regexes`. On a match it returns `{"decision": "block"}` with the list of violations, and the model gets that feedback to revise before ending the turn. No matches: exits 0 silently. Fails open if the config is missing or malformed, so a broken hook never bricks a session.
+`style_check.py` is a Stop hook. Claude Code invokes it after every assistant turn with the transcript path on stdin. The script:
+
+1. Reads the transcript JSONL and extracts the text of the final assistant message.
+2. Loads `~/.claude/hooks/style_check_config.json`, falling back to built-in defaults if the file is missing or malformed.
+3. Scans the text for em dashes (Unicode `U+2014`) and each entry in `banned_regexes`.
+4. **On match:** emits `{"decision": "block", "reason": "..."}` listing every violation. Claude sees the reason and revises before ending the turn.
+5. **On no match:** exits 0 silently.
+
+It fails open on any error, so a broken config never bricks a session.
+
+## Config schema
+
+`~/.claude/hooks/style_check_config.json`:
+
+```json
+{
+  "enforce_em_dash": true,
+  "banned_regexes": [
+    {"pattern": "\\bdelve\\b", "flags": "i", "label": "'delve' (AI tell)"}
+  ],
+  "style_guide_hint": "~/.claude/projects/<sanitized-cwd>/memory/user_writing_style.md"
+}
+```
+
+| Field | Type | Purpose |
+| --- | --- | --- |
+| `enforce_em_dash` | bool | Toggles the hard-coded `U+2014` check |
+| `banned_regexes` | array | Each entry: `{pattern, flags, label}`. `flags` accepts `i` (case-insensitive) and `m` (multiline). `label` is what appears in the violation message. |
+| `style_guide_hint` | string | Path the block reason points the model at, so it knows where to look up tone notes |
+
+Add or remove entries any time without touching Python.
+
+### Default banned patterns
+
+| Label | Pattern |
+| --- | --- |
+| `'delve' (AI tell)` | `\bdelve\b` |
+| `'utilize' (use 'use')` | `\butilize\b` |
+| `'Certainly!' (AI tell)` | `\bCertainly!` |
+| `'Absolutely!' (AI tell)` | `\bAbsolutely!` |
+| `'I'd be happy to' (AI tell)` | `I'd be happy to` |
+| `'In today's fast-paced ...' (AI tell)` | `In today's fast[- ]paced` |
+
+## Updating
+
+```bash
+cd path/to/learn-my-writing-style
+git pull
+cp -R skills/learn-my-writing-style ~/.claude/skills/
+cp hooks/style_check.py ~/.claude/hooks/
+```
+
+Your config and memory files are left alone.
+
+## Re-running the interview
+
+Invoke `/learn-my-writing-style` again. By default it skips files that already exist, so deleting one memory file lets you refresh just that file. Pick **Replace** for a full rebuild.
+
+## Uninstall
+
+```bash
+rm -rf ~/.claude/skills/learn-my-writing-style
+rm ~/.claude/hooks/style_check.py
+rm ~/.claude/hooks/style_check_config.json
+```
+
+Open `~/.claude/settings.json` and remove the `Stop` entry that runs `style_check.py`. Memory files under `~/.claude/projects/.../memory/` are preserved until you delete them yourself.
+
+## Troubleshooting
+
+**Hook does not fire after install.** Open `/hooks` once in Claude Code or restart the session. The settings watcher does not always pick up newly-added hook blocks mid-session.
+
+**Hook fires but never blocks.** Test it manually:
+
+```bash
+echo '{"transcript_path": "/path/to/recent/transcript.jsonl"}' | python3 ~/.claude/hooks/style_check.py
+```
+
+A non-empty JSON response means the rules match. An empty response means the message was clean (or the path was wrong).
+
+**Disable temporarily.** Set `enforce_em_dash: false` and `banned_regexes: []` in the config, or remove the Stop entry from `settings.json`.
+
+**Edit rules without rerunning the skill.** `style_check_config.json` is plain JSON. Add or remove entries directly.
+
+## Repository layout
+
+```
+learn-my-writing-style/
+├── README.md                              this file
+├── hooks/style_check.py                   Stop hook (copied to ~/.claude/hooks/)
+├── scripts/sync-from-claude.sh            maintainer-only: mirror live ~/.claude into the repo
+└── skills/learn-my-writing-style/SKILL.md skill instructions Claude reads at runtime
+```
+
+`scripts/sync-from-claude.sh` is for the repo maintainer. End users do not run it.
+
+`skills/learn-my-writing-style/SKILL.md` is the canonical instruction set Claude follows when you invoke the slash command. Read it if you want to know exactly what the skill does, or to fork the interview structure.
 
 ## Requirements
 
-- Claude Code
+- Claude Code with Stop hook support
 - Python 3 in `$PATH`
+- Unix-like environment (macOS, Linux). Windows requires WSL or path adjustments.
