@@ -5,7 +5,18 @@ description: Onboarding that derives your writing voice from real authored prose
 
 # /learn-my-writing-style
 
-Build the user's Claude Code personal layer from real prose they've written (channel-first) or a short interview (fallback), then wire up the style-check enforcement hook. Designed so anyone can run this once after cloning a Claude Code config scaffold.
+Wizard-style onboarding. Build the user's Claude Code personal layer from real prose they've written (channel-first) or a short interview (fallback), then wire up the style-check enforcement hook. Designed for minimum input: ideal path is one consent, one one-line answer, one final yes.
+
+## Wizard ethos
+
+Frame the user-facing output as a 4-step wizard so the user always knows where they are. Suggested step labels:
+
+1. **Detecting channels.**
+2. **Pulling samples and deriving voice** (or interview, if no channels).
+3. **One quick question** (name + title + day-to-day).
+4. **Review and write.**
+
+Print a one-line "Step N/4: ..." header at each transition. Default to the lowest-friction option at every choice point. Only ask the user to type when there's no reasonable default.
 
 ## What this produces
 
@@ -81,42 +92,56 @@ From the collected samples, extract:
 - **Filler words that recur:** repeated low-content words or hedges to ban (e.g., "really", "just", "basically").
 - **Verbatim phrases (2-3 short, total under 500 characters):** quote the user's own prose so the analysis is grounded.
 
-### 1e. Profile questions (always asked; can't derive)
+### 1e. The one question that has to be asked
 
-Ask, one per turn:
+Ask once and wait:
 
-1. **Name and title?** (e.g. "Jane Smith, Senior Product Designer")
-2. **Company or organization?** (Or "none" for personal/solo.)
-3. **Work email?** (Optional.) **Personal email?** (Optional.)
-4. **One sentence: what do you actually do day to day?**
-5. **Two or three principles or goals that guide your work?** (Short phrases, not essays.)
-6. **AI tells to block beyond the defaults?** Defaults: em dashes, `delve`, `utilize`, `Certainly!`, `Absolutely!`, `I'd be happy to`, `In today's fast-paced`. Ask **keep all defaults**, **drop any** (which), and **add any** new patterns. If 1d already surfaced specific tells the user uses, mention them and ask whether to ban or keep.
+> **In one line: your name, title, and (optionally) what you do.** Example: `Jane Smith, Senior Product Designer at Acme; design systems and accessibility`
 
-Skip any question whose answer is already obvious from the samples.
+Parse the answer:
+
+- **Name:** everything before the first comma.
+- **Title:** between first comma and ` at ` (or next comma if no `at`).
+- **Organization:** after ` at `, up to the next comma or semicolon. If absent, try to derive from the user's email domain (e.g. `jane@acme.com` → "Acme"). If still unknown, treat as "none."
+- **Day-to-day:** after the last semicolon or comma. If absent, default to placeholder.
+
+If the parse is ambiguous on a single field (e.g. no clear org), ask one targeted follow-up. Do not re-ask the whole prompt.
+
+**Defaults applied silently** (every one of these is editable later):
+
+- Work email and personal email: placeholders.
+- Guiding principles: a placeholder note (`<!-- Add 2-3 phrases as you discover them. -->`).
+- AI tells: keep all defaults, plus any new patterns derivation surfaced. Do not ask whether to drop or add. The user edits `~/.claude/hooks/style_check_config.json` directly or runs `/style-correct` later.
+- Filler words: only what derivation found. If derivation found nothing, leave empty.
+- Exemplar styles: only what derivation found. If nothing, leave blank rather than ask.
+
+This step exists to capture the only thing that's truly unknowable from samples: who the user is and what they call themselves.
 
 ### 1f. Interview fallback (only if 1c was skipped)
 
-Ask the full voice interview in addition to the profile questions:
+If no MCPs were available or the user declined sample-pulling, ask three short questions in sequence:
 
-- **Pick 3-4 adjectives that describe the voice you want in writing.** Examples: approachable, authoritative, prudent, efficient, warm, analytical, direct, dry.
-- **Name 2-3 writers or publications whose tone you'd like to sound like.** Examples: Isaac Asimov, The Economist, a specific blog or author.
-- **Filler words you catch yourself using and want cut?** (Optional; e.g. `basically`, `really`, `just`.)
-- **Slack voice notes?** (e.g. casual, lowercase starts, emoji, short. Or skip.)
-- **Email voice notes?** (e.g. warm openings, sign-off template. Or skip.)
-- **Long-form doc voice notes?** (e.g. structured, scannable headers, tables for multi-dimensional data, citations. Or skip.)
+1. **In one line: your name, title, and (optionally) what you do.** (Same parse as 1e.)
+2. **Pick 3-4 adjectives for the voice you want in writing.** Examples: direct, warm, dry, analytical, approachable, authoritative.
+3. **Anything to ban beyond the default AI tells?** (Defaults: em dashes, `delve`, `utilize`, `Certainly!`, `Absolutely!`, `I'd be happy to`, `In today's fast-paced`. Press Enter to keep all defaults.)
 
-Answers that are skipped get placeholder comments in the file (so the user can fill in later), not empty sections.
+Skip exemplars, filler words, and Slack/email/long-form notes. They become placeholders the user can fill in later (`<!-- Fill this in after a week of real usage. -->`).
 
-## Step 2: confirm
+## Step 2: review and confirm (wizard step 4/4)
 
-Summarize back what you captured. Mark **how each item was sourced** so the user can correct anything that was misderived:
+Print **Step 4/4: Review** and show a tight summary of what's about to be written. Tag each item by source so the user can spot mistakes:
 
-- Profile facts (name, title, org, day-to-day, principles): from the interview.
-- Voice adjectives, exemplars, channel habits, filler words: tag each as **derived from samples** or **from interview** depending on path 1c/1d vs 1f.
-- Final banned-pattern list: defaults plus user additions.
-- For derived items, include 1-2 short verbatim quotes that supported the inference.
+- **Profile** (from one-line answer): name, title, org, day-to-day. Mark fields that fell back to placeholders.
+- **Voice** (from samples or interview): tone adjectives, exemplars, channel habits, filler words. Tag each as `derived` or `interview` and include 1-2 short verbatim quotes for derived items.
+- **Banned patterns:** defaults plus anything new from derivation.
 
-Ask for `yes` / changes before writing. Common corrections: "the tone adjective is wrong," "drop that exemplar," "add `really` to filler." Apply edits and re-confirm if anything substantive changed.
+End with a single prompt: `Write everything? [yes / edit X / cancel]`
+
+- `yes` (or empty input): proceed.
+- `edit X`: apply the change, redraw the summary, re-prompt.
+- `cancel`: stop. Write nothing.
+
+Do not ask multiple yes/no questions. One prompt, one answer.
 
 ## Step 3: write the memory files
 

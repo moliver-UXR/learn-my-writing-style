@@ -30,25 +30,29 @@ After running `/learn-my-writing-style` once:
 
 ## Install
 
+Two commands:
+
 ```bash
 git clone https://github.com/moliver-UXR/learn-my-writing-style.git
-cd learn-my-writing-style
-
-mkdir -p ~/.claude/skills ~/.claude/hooks
-cp -R skills/* ~/.claude/skills/
-cp hooks/style_check.py ~/.claude/hooks/
-chmod +x ~/.claude/hooks/style_check.py
+cd learn-my-writing-style && ./install.sh
 ```
 
-Then in any Claude Code session, run:
+`install.sh` copies the two skills into `~/.claude/skills/`, copies the hook into `~/.claude/hooks/`, wires the Stop hook into `~/.claude/settings.json` (merging, not overwriting), and runs a smoke test. Idempotent: re-run after `git pull` to update.
+
+Then in any Claude Code session:
 
 ```
 /learn-my-writing-style
 ```
 
-The skill takes the **channel-first** path when MCPs are mounted: it derives your voice from prose you've actually written, then asks only the profile questions that can't be inferred. If no MCPs are mounted (or you decline), it falls back to a short interview.
+That's the wizard. Four steps, ~30 seconds:
 
-After that, `/style-correct` is available whenever you want to teach Claude a new correction.
+1. **Detect channels** (Gmail, Drive, Slack, Confluence, GitHub via mounted MCPs).
+2. **Pull samples and derive voice** (with your consent). If no MCPs are mounted, fall back to a short interview.
+3. **One question:** your name, title, and what you do. (Org and day-to-day are parsed from the same line where possible.)
+4. **Review and confirm.** One yes proceeds; you can edit any item before writing.
+
+Everything else (emails, principles, AI tells beyond defaults, filler words, exemplars) is defaulted to placeholders or derived results. You can edit `~/.claude/projects/<sanitized-cwd>/memory/` and `~/.claude/hooks/style_check_config.json` directly any time, or use `/style-correct` to add a rule from a manual edit.
 
 ## How voice is derived
 
@@ -68,18 +72,24 @@ The skill **never stores raw fetched content**. Only the derived attributes and 
 
 If no MCPs are mounted, the skill asks the original interview questions (3-4 tone adjectives, 2-3 exemplars, AI tells, filler words, optional Slack/email/long-form notes) instead.
 
-## Profile questions (always asked)
+## Profile question (one line)
 
-Some things can't be derived from samples and are always asked:
+The wizard parses one answer:
 
-- Name and title
-- Organization (or "none")
-- Work and personal email (optional)
-- One-sentence day-to-day
-- Two or three guiding principles
-- AI tells to ban beyond the defaults
+> In one line: your name, title, and (optionally) what you do.
 
-Skipped optional questions become placeholder comments in the file (`<!-- Fill this in after a week of real usage. -->`), not empty sections.
+Example: `Jane Smith, Senior Product Designer at Acme; design systems and accessibility.`
+
+The wizard splits that into name, title, organization (also derived from email domain when Gmail is mounted), and day-to-day. Anything missing becomes a placeholder you can fill in later.
+
+Everything else is defaulted:
+
+- Emails: placeholders.
+- Guiding principles: placeholder note.
+- AI tells: keep all defaults; the wizard does not re-ask.
+- Exemplars and filler words: derived from samples or left blank.
+
+You can edit any of it later in `~/.claude/projects/<sanitized-cwd>/memory/` or `~/.claude/hooks/style_check_config.json`. Use `/style-correct` for additions driven by real edits.
 
 ## How the hook works
 
@@ -167,14 +177,12 @@ The log is append-only and never rotated. Delete it whenever you want a clean sl
 
 ```bash
 cd path/to/learn-my-writing-style
-git pull
-cp -R skills/learn-my-writing-style ~/.claude/skills/
-cp hooks/style_check.py ~/.claude/hooks/
+git pull && ./install.sh
 ```
 
-Your config and memory files are left alone.
+`install.sh` is idempotent. It overwrites the skills and the hook, leaves your config and memory files alone, and skips the `settings.json` merge if the Stop hook is already wired.
 
-## Re-running the interview
+## Re-running the wizard
 
 Invoke `/learn-my-writing-style` again. By default it skips files that already exist, so deleting one memory file lets you refresh just that file. Pick **Replace** for a full rebuild.
 
@@ -222,6 +230,7 @@ A non-empty JSON response means the rules match. An empty response means the mes
 ```
 learn-my-writing-style/
 ├── README.md                                  this file
+├── install.sh                                 wizard installer (copy + wire + smoke test)
 ├── hooks/style_check.py                       Stop hook (copied to ~/.claude/hooks/)
 ├── scripts/sync-from-claude.sh                maintainer-only: mirror live ~/.claude into the repo
 └── skills/
@@ -231,7 +240,7 @@ learn-my-writing-style/
 
 `scripts/sync-from-claude.sh` is for the repo maintainer. End users do not run it.
 
-The `SKILL.md` files are the canonical instruction sets Claude follows when you invoke each slash command. Read them if you want to know exactly what the skills do, or to fork the interview / correction flow.
+The `SKILL.md` files are the canonical instruction sets Claude follows when you invoke each slash command. Read them if you want to know exactly what the skills do, or to fork the wizard or correction flow.
 
 ## Requirements
 
