@@ -97,6 +97,28 @@ Add or remove entries any time without touching Python.
 | `'I'd be happy to' (AI tell)` | `I'd be happy to` |
 | `'In today's fast-paced ...' (AI tell)` | `In today's fast[- ]paced` |
 
+## Block log
+
+Every time the hook blocks a turn, it appends one JSON line to `~/.claude/hooks/style_check_blocks.log`:
+
+```json
+{"ts": "2026-05-04T18:42:11+00:00", "violations": ["em dash: \"...prose \u2014 flattened...\""]}
+```
+
+(`\u2014` is the JSON escape for the em dash character; `json.dumps` always escapes non-ASCII by default.)
+
+Use it to see which rules earn their keep:
+
+```bash
+# Top violation labels in the last 200 blocks
+tail -n 200 ~/.claude/hooks/style_check_blocks.log \
+  | jq -r '.violations[]' \
+  | sed 's/:.*//' \
+  | sort | uniq -c | sort -rn
+```
+
+The log is append-only and never rotated. Delete it whenever you want a clean slate.
+
 ## Updating
 
 ```bash

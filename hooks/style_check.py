@@ -15,10 +15,12 @@ from __future__ import annotations
 import json
 import re
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 
 CONFIG_PATH = Path.home() / ".claude" / "hooks" / "style_check_config.json"
+BLOCK_LOG_PATH = Path.home() / ".claude" / "hooks" / "style_check_blocks.log"
 
 DEFAULT_CONFIG: dict = {
     "enforce_em_dash": True,
@@ -109,6 +111,19 @@ def load_last_assistant_text(transcript_path: str) -> str:
     return ""
 
 
+def log_block(violations: list[str]) -> None:
+    """Append one JSON line per block event. Fail silently on any I/O error."""
+    try:
+        entry = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "violations": violations,
+        }
+        with BLOCK_LOG_PATH.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(entry) + "\n")
+    except OSError:
+        pass
+
+
 def collect_violations(text: str, config: dict) -> list[str]:
     """Return human-readable notes for each style violation found."""
     notes: list[str] = []
@@ -161,6 +176,8 @@ def main() -> None:
         "  - Remove AI tells and rewrite in a direct, committed voice.",
         "  - Verbatim quotes from the user or a participant are the only em-dash exception.",
     ]
+
+    log_block(violations)
 
     response = {
         "decision": "block",
