@@ -59,10 +59,24 @@ Skipped questions become placeholder comments in the file (`<!-- Fill this in af
 1. Reads the transcript JSONL and extracts the text of the final assistant message.
 2. Loads `~/.claude/hooks/style_check_config.json`, falling back to built-in defaults if the file is missing or malformed.
 3. Scans the text for em dashes (Unicode `U+2014`) and each entry in `banned_regexes`.
-4. **On match:** emits `{"decision": "block", "reason": "..."}` listing every violation. Claude sees the reason and revises before ending the turn.
-5. **On no match:** exits 0 silently.
+4. Walks user messages newest-first and classifies the conversation context as `slack`, `email`, `long_form`, or `base` using `context_patterns`.
+5. **On match:** emits `{"decision": "block", "reason": "..."}` listing every violation, the detected context, and which layer of `user_writing_style.md` to apply on the rewrite. Claude sees the reason and revises before ending the turn.
+6. **On no match:** exits 0 silently.
 
 It fails open on any error, so a broken config never bricks a session.
+
+## Context routing
+
+Every block tells the model which voice layer to apply. Detection runs against the most recent user message that matches a context pattern; if none match, the hook returns `base` and asks the model to apply the base tone.
+
+| Context | Triggers (default patterns) | Layer the model is told to apply |
+| --- | --- | --- |
+| `slack` | `slack`, `channel`, `dm`, `post in #...`, `#channel-name` | Slack layer (casual, lowercase starts, short) |
+| `email` | `email`, `inbox`, `reply to`, `subject:`, `cc:`, `sign-off` | Email layer (warm openings, sign-off if specified) |
+| `long_form` | `memo`, `doc`, `report`, `spec`, `proposal`, `brief`, `readout`, `deck`, `prd`, `wiki`, etc. | Long-form layer (structured, scannable, citations) |
+| `base` | nothing matched | Base tone |
+
+Override the patterns via `context_patterns` in the config (same `{context, pattern, flags}` shape as `banned_regexes`).
 
 ## Config schema
 
@@ -82,6 +96,7 @@ It fails open on any error, so a broken config never bricks a session.
 | --- | --- | --- |
 | `enforce_em_dash` | bool | Toggles the hard-coded `U+2014` check |
 | `banned_regexes` | array | Each entry: `{pattern, flags, label}`. `flags` accepts `i` (case-insensitive) and `m` (multiline). `label` is what appears in the violation message. |
+| `context_patterns` | array | Each entry: `{context, pattern, flags}`. `context` is one of `slack`, `email`, `long_form`. Optional; built-in defaults cover the common triggers. |
 | `style_guide_hint` | string | Path the block reason points the model at, so it knows where to look up tone notes |
 
 Add or remove entries any time without touching Python.
@@ -102,7 +117,7 @@ Add or remove entries any time without touching Python.
 Every time the hook blocks a turn, it appends one JSON line to `~/.claude/hooks/style_check_blocks.log`:
 
 ```json
-{"ts": "2026-05-04T18:42:11+00:00", "violations": ["em dash: \"...prose \u2014 flattened...\""]}
+{"ts": "2026-05-04T18:42:11+00:00", "context": "email", "violations": ["em dash: \"...prose \u2014 flattened...\""]}
 ```
 
 (`\u2014` is the JSON escape for the em dash character; `json.dumps` always escapes non-ASCII by default.)

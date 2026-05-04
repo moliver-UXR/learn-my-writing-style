@@ -33,6 +33,18 @@ DEFAULT_CONFIG: dict = {
         {"pattern": r"In today's fast[- ]paced", "flags": "i", "label": "'In today's fast-paced ...' (AI tell)"},
     ],
     "style_guide_hint": "~/.claude/projects/<sanitized-cwd>/memory/user_writing_style.md",
+    "context_patterns": [
+        {"context": "slack", "pattern": r"\b(slack|channel|dm)\b|post in #|message in #|#[a-z0-9_-]+", "flags": "i"},
+        {"context": "email", "pattern": r"\b(email|inbox|reply to|sign[- ]off|cc:|bcc:)\b|subject:", "flags": "i"},
+        {"context": "long_form", "pattern": r"\b(memo|doc|document|page|report|long[- ]form|whitepaper|essay|spec|proposal|brief|readout|deck|article|blog post|wiki|prd)\b", "flags": "i"},
+    ],
+}
+
+CONTEXT_HINTS: dict[str, str] = {
+    "slack": "Detected Slack context. Apply the Slack layer of your style guide (casual, lowercase starts, short).",
+    "email": "Detected email context. Apply the email layer (warm openings, sign-off if specified).",
+    "long_form": "Detected long-form context. Apply the long-form layer (structured, scannable headers, citations where evidence is cited).",
+    "base": "No specific channel detected. Apply the base tone.",
 }
 
 
@@ -93,35 +105,99 @@ def load_last_assistant_text(transcript_path: str) -> str:
             continue
         if entry.get("type") != "assistant":
             continue
-
-        msg = entry.get("message") or {}
-        content = msg.get("content")
-
-        if isinstance(content, list):
-            parts: list[str] = []
-            for block in content:
-                if isinstance(block, dict) and block.get("type") == "text":
-                    text = block.get("text")
-                    if isinstance(text, str):
-                        parts.append(text)
-            if parts:
-                return "\n".join(parts)
-        elif isinstance(content, str) and content:
-            return content
+        text = extract_text(entry)
+        if text:
+            return text
     return ""
 
 
-def log_block(violations: list[str]) -> None:
+def log_block(violations: list[str], context: str) -> None:
     """Append one JSON line per block event. Fail silently on any I/O error."""
     try:
         entry = {
             "ts": datetime.now(timezone.utc).isoformat(),
+            "context": context,
             "violations": violations,
         }
         with BLOCK_LOG_PATH.open("a", encoding="utf-8") as f:
             f.write(json.dumps(entry) + "\n")
     except OSError:
         pass
+
+
+def compile_context_patterns(config: dict) -> list[tuple[str, re.Pattern[str]]]:
+    """Compile context_patterns entries; skip any that don't parse."""
+    entries = config.get("context_patterns")
+    if not isinstance(entries, list):
+        entries = DEFAULT_CONFIG["context_patterns"]
+    compiled: list[tuple[str, re.Pattern[str]]] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        context = entry.get("context")
+        pattern = entry.get("pattern")
+        if not isinstance(context, str) or not isinstance(pattern, str) or not pattern:
+            continue
+        flags_str = entry.get("flags", "") or ""
+        flags = 0
+        if "i" in flags_str:
+            flags |= re.IGNORECASE
+        if "m" in flags_str:
+            flags |= re.MULTILINE
+        try:
+            compiled.append((context, re.compile(pattern, flags)))
+        except re.error:
+            continue
+    return compiled
+
+
+def extract_text(entry: dict) -> str:
+    """Pull text from a transcript entry (assistant or user)."""
+    msg = entry.get("message") or {}
+    content = msg.get("content")
+    if isinstance(content, list):
+        parts: list[str] = []
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == "text":
+                text = block.get("text")
+                if isinstance(text, str):
+                    parts.append(text)
+        return "\n".join(parts)
+    if isinstance(content, str):
+        return content
+    return ""
+
+
+def detect_context(transcript_path: str, config: dict) -> str:
+    """Walk user messages newest-first; return the first context label that matches."""
+    path = Path(transcript_path)
+    if not path.exists():
+        return "base"
+    try:
+        lines = path.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return "base"
+
+    patterns = compile_context_patterns(config)
+    if not patterns:
+        return "base"
+
+    for raw in reversed(lines):
+        if not raw.strip():
+            continue
+        try:
+            entry = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("type") != "user":
+            continue
+        text = extract_text(entry)
+        if not text:
+            continue
+        for label, pattern in patterns:
+            if pattern.search(text):
+                return label
+    return "base"
 
 
 def collect_violations(text: str, config: dict) -> list[str]:
@@ -167,17 +243,20 @@ def main() -> None:
         sys.exit(0)
 
     style_guide = config.get("style_guide_hint") or DEFAULT_CONFIG["style_guide_hint"]
+    context = detect_context(transcript_path, config)
+    context_hint = CONTEXT_HINTS.get(context, CONTEXT_HINTS["base"])
     reason_lines = [
         "Writing-style violations in your final response. Revise before ending the turn:",
         *(f"  - {v}" for v in violations),
         "",
+        context_hint,
         f"Apply your style guide ({style_guide}):",
         "  - Replace em dashes with commas, periods, colons, or parentheses.",
         "  - Remove AI tells and rewrite in a direct, committed voice.",
         "  - Verbatim quotes from the user or a participant are the only em-dash exception.",
     ]
 
-    log_block(violations)
+    log_block(violations, context)
 
     response = {
         "decision": "block",
