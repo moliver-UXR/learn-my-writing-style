@@ -1,30 +1,38 @@
 #!/usr/bin/env bash
-# Mirror the live skill and hook from ~/.claude into this repo, then commit + push.
+# Mirror the live skills and hook from ~/.claude into this repo, then commit + push.
 # Idempotent: exits 0 with no commit when nothing changed.
+# To track an additional skill, add its name to the SKILLS array.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SRC_SKILL="$HOME/.claude/skills/learn-my-writing-style/SKILL.md"
+SKILLS=(learn-my-writing-style style-correct)
 SRC_HOOK="$HOME/.claude/hooks/style_check.py"
-DST_SKILL="$REPO_ROOT/skills/learn-my-writing-style/SKILL.md"
 DST_HOOK="$REPO_ROOT/hooks/style_check.py"
 
-[[ -f "$SRC_SKILL" ]] || { echo "missing source: $SRC_SKILL" >&2; exit 1; }
 [[ -f "$SRC_HOOK" ]] || { echo "missing source: $SRC_HOOK" >&2; exit 1; }
 
-mkdir -p "$(dirname "$DST_SKILL")" "$(dirname "$DST_HOOK")"
-cp "$SRC_SKILL" "$DST_SKILL"
+declare -a TRACKED=("$DST_HOOK")
+mkdir -p "$(dirname "$DST_HOOK")"
 cp "$SRC_HOOK" "$DST_HOOK"
 chmod +x "$DST_HOOK"
 
+for skill in "${SKILLS[@]}"; do
+  src="$HOME/.claude/skills/$skill/SKILL.md"
+  dst="$REPO_ROOT/skills/$skill/SKILL.md"
+  [[ -f "$src" ]] || { echo "missing source: $src" >&2; exit 1; }
+  mkdir -p "$(dirname "$dst")"
+  cp "$src" "$dst"
+  TRACKED+=("$dst")
+done
+
 cd "$REPO_ROOT"
-if git diff --quiet HEAD -- "$DST_SKILL" "$DST_HOOK" 2>/dev/null; then
+if git diff --quiet HEAD -- "${TRACKED[@]}" 2>/dev/null; then
   echo "no changes; nothing to commit"
   exit 0
 fi
 
-git add "$DST_SKILL" "$DST_HOOK"
-git commit -m "Sync skill and hook from ~/.claude
+git add "${TRACKED[@]}"
+git commit -m "Sync skills and hook from ~/.claude
 
 Co-Authored-By: Claude <noreply@anthropic.com>"
 git push origin main

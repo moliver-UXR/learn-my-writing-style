@@ -1,10 +1,16 @@
 # learn-my-writing-style
 
-A Claude Code skill that interviews you, captures your writing voice, and wires a Stop hook so future responses get blocked when they violate your guide before you ever see them.
+Claude Code skills that capture your writing voice, enforce it with a Stop hook, and let you teach Claude new corrections one paste at a time.
+
+The repo ships two slash commands and one hook:
+
+- **`/learn-my-writing-style`**: interview-driven onboarding. Builds your voice profile and wires the hook.
+- **`/style-correct`**: paste your edited version of a recent Claude response. The skill diffs it, proposes a banned-phrase rule, and (with confirmation) appends it to the hook's config.
+- **`style_check.py`**: the Stop hook. Scans every assistant turn, blocks on em dashes and banned regexes, routes the rewrite hint by detected channel context (Slack, email, long-form, base), and logs every block.
 
 ## Why
 
-Out of the box, Claude leans on em dashes, "Certainly!", "Let me explain...", and other tells that flatten its prose. Memory files alone are advisory. This skill pairs a voice profile with a deterministic check that runs on every assistant turn, so the model fixes violations before the response lands.
+Out of the box, Claude leans on em dashes, "Certainly!", "Let me explain...", and other tells that flatten its prose. Memory files alone are advisory. This repo pairs a voice profile with a deterministic check that runs on every assistant turn, plus a self-improving loop that turns each manual correction into a new rule.
 
 ## What you get
 
@@ -29,7 +35,7 @@ git clone https://github.com/moliver-UXR/learn-my-writing-style.git
 cd learn-my-writing-style
 
 mkdir -p ~/.claude/skills ~/.claude/hooks
-cp -R skills/learn-my-writing-style ~/.claude/skills/
+cp -R skills/* ~/.claude/skills/
 cp hooks/style_check.py ~/.claude/hooks/
 chmod +x ~/.claude/hooks/style_check.py
 ```
@@ -40,7 +46,7 @@ Then in any Claude Code session, run:
 /learn-my-writing-style
 ```
 
-It asks twelve quick questions, summarizes what it captured, and writes everything once you say `yes`.
+It asks twelve quick questions, summarizes what it captured, and writes everything once you say `yes`. After that, `/style-correct` is available whenever you want to teach Claude a new correction.
 
 ## What the interview asks
 
@@ -149,12 +155,25 @@ Your config and memory files are left alone.
 
 Invoke `/learn-my-writing-style` again. By default it skips files that already exist, so deleting one memory file lets you refresh just that file. Pick **Replace** for a full rebuild.
 
+## Teaching new rules: `/style-correct`
+
+When you rewrite a Claude response in your head or in a doc, run `/style-correct` to turn that one correction into a permanent rule. The skill:
+
+1. Asks you to paste your edited version (or describe the change in words: "swap 'utilize' for 'use'").
+2. Diffs the paste against the most recent assistant message in the conversation.
+3. Identifies removed or replaced phrases and proposes a banned regex for each (with the replacement noted in the label).
+4. Shows the candidate rules and asks for confirmation. You can accept all, pick a subset, or decline.
+5. Appends the approved entries to `~/.claude/hooks/style_check_config.json`.
+
+The skill only encodes phrase-level rules. Tone or structural changes get flagged for you to add to `user_writing_style.md` directly.
+
 ## Uninstall
 
 ```bash
-rm -rf ~/.claude/skills/learn-my-writing-style
+rm -rf ~/.claude/skills/learn-my-writing-style ~/.claude/skills/style-correct
 rm ~/.claude/hooks/style_check.py
 rm ~/.claude/hooks/style_check_config.json
+rm -f ~/.claude/hooks/style_check_blocks.log
 ```
 
 Open `~/.claude/settings.json` and remove the `Stop` entry that runs `style_check.py`. Memory files under `~/.claude/projects/.../memory/` are preserved until you delete them yourself.
@@ -179,15 +198,17 @@ A non-empty JSON response means the rules match. An empty response means the mes
 
 ```
 learn-my-writing-style/
-├── README.md                              this file
-├── hooks/style_check.py                   Stop hook (copied to ~/.claude/hooks/)
-├── scripts/sync-from-claude.sh            maintainer-only: mirror live ~/.claude into the repo
-└── skills/learn-my-writing-style/SKILL.md skill instructions Claude reads at runtime
+├── README.md                                  this file
+├── hooks/style_check.py                       Stop hook (copied to ~/.claude/hooks/)
+├── scripts/sync-from-claude.sh                maintainer-only: mirror live ~/.claude into the repo
+└── skills/
+    ├── learn-my-writing-style/SKILL.md        onboarding skill, /learn-my-writing-style
+    └── style-correct/SKILL.md                 correction-capture skill, /style-correct
 ```
 
 `scripts/sync-from-claude.sh` is for the repo maintainer. End users do not run it.
 
-`skills/learn-my-writing-style/SKILL.md` is the canonical instruction set Claude follows when you invoke the slash command. Read it if you want to know exactly what the skill does, or to fork the interview structure.
+The `SKILL.md` files are the canonical instruction sets Claude follows when you invoke each slash command. Read them if you want to know exactly what the skills do, or to fork the interview / correction flow.
 
 ## Requirements
 
