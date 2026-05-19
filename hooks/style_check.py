@@ -44,6 +44,7 @@ CONTEXT_HINTS: dict[str, str] = {
     "slack": "Detected Slack context. Apply the Slack layer of your style guide (casual, lowercase starts, short).",
     "email": "Detected email context. Apply the email layer (warm openings, sign-off if specified).",
     "long_form": "Detected long-form context. Apply the long-form layer (structured, scannable headers, citations where evidence is cited).",
+    "github": "Detected GitHub context. Apply the GitHub layer: dual-audience (human newcomer + LLM intermediary), front-load what the project does and why, structured parseable sections, Michael's voice throughout.",
     "base": "No specific channel detected. Apply the base tone.",
 }
 
