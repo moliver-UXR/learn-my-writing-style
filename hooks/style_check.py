@@ -4,7 +4,9 @@ Stop hook: enforce a writing-style floor on every assistant turn.
 
 Scans the final assistant message for high-confidence style violations:
   - em dashes (configurable via enforce_em_dash)
+  - en dashes (configurable via enforce_en_dash)
   - banned regexes loaded from ~/.claude/hooks/style_check_config.json
+    (includes the "It's not X. It's Y." negate-pivot construction)
 
 Falls back to built-in defaults if no config is present. Fails open on any
 parse error so a broken hook never bricks a session.
@@ -24,6 +26,7 @@ BLOCK_LOG_PATH = Path.home() / ".claude" / "hooks" / "style_check_blocks.log"
 
 DEFAULT_CONFIG: dict = {
     "enforce_em_dash": True,
+    "enforce_en_dash": True,
     "banned_regexes": [
         {"pattern": r"\bdelve\b", "flags": "i", "label": "'delve' (AI tell)"},
         {"pattern": r"\butilize\b", "flags": "i", "label": "'utilize' (use 'use')"},
@@ -31,6 +34,18 @@ DEFAULT_CONFIG: dict = {
         {"pattern": r"\bAbsolutely!", "flags": "", "label": "'Absolutely!' (AI tell)"},
         {"pattern": r"I'd be happy to", "flags": "i", "label": "'I'd be happy to' (AI tell)"},
         {"pattern": r"In today's fast[- ]paced", "flags": "i", "label": "'In today's fast-paced ...' (AI tell)"},
+        # Negate-pivot AI tell ("It's not X. It's Y."). Anchored on an it/that/this
+        # subject + a copula ("'s"/" is"), a short same-line gap ([^.!?\n]{0,80} so it
+        # can't span sentences or paragraphs), a joiner ([.!?,;] handles period, comma,
+        # and semicolon forms), then a re-asserting "it's"/"it is". Two known boundaries,
+        # by design:
+        #   1. Does NOT catch plural/subjectless pivots ("teams are not X. They are Y.") --
+        #      regexing those flags ordinary contrastive prose, so they stay a judgment rule.
+        #   2. DOES fire on plain adjacent negation ("It is not ready. It's a known issue.").
+        #      Accepted false-positive cost of catching the shape; reword to clear.
+        # style_check_config.json carries the same two patterns -- keep them in sync.
+        {"pattern": r"\b(it|that)('s| is) not\b[^.!?\n]{0,80}[.!?,;]\s+it('s| is)\b", "flags": "i", "label": "'It's not X. It's Y.' construction (AI tell)"},
+        {"pattern": r"\bthis (is ?n['’]?t|is not)\b[^.!?\n]{0,80}[.!?,;]\s+it('s| is)\b", "flags": "i", "label": "'This isn't X. It's Y.' construction (AI tell)"},
     ],
     "style_guide_hint": "~/.claude/projects/<sanitized-cwd>/memory/user_writing_style.md",
     "context_patterns": [
@@ -205,13 +220,25 @@ def collect_violations(text: str, config: dict) -> list[str]:
     """Return human-readable notes for each style violation found."""
     notes: list[str] = []
 
+    # Dash checks flag EVERY occurrence, including dashes inside verbatim quotes.
+    # The hook can't tell a quote from prose, so the "verbatim quote" exception is
+    # applied by human/Claude judgment (reword or keep), not enforced here.
+    # snippet shows the first occurrence (+/-40 chars) for context; count reports the rest.
     if config.get("enforce_em_dash", True):
-        em_count = text.count("\u2014")
+        em_count = text.count("\u2014")  # U+2014 em dash
         if em_count:
             idx = text.find("\u2014")
             snippet = text[max(0, idx - 40) : idx + 41].replace("\n", " ").strip()
             suffix = f" (and {em_count - 1} more)" if em_count > 1 else ""
             notes.append(f'em dash: "...{snippet}..."{suffix}')
+
+    if config.get("enforce_en_dash", True):
+        en_count = text.count("\u2013")  # U+2013 en dash (distinct from hyphen-minus U+002D)
+        if en_count:
+            idx = text.find("\u2013")
+            snippet = text[max(0, idx - 40) : idx + 41].replace("\n", " ").strip()
+            suffix = f" (and {en_count - 1} more)" if en_count > 1 else ""
+            notes.append(f'en dash: "...{snippet}..."{suffix}')
 
     for pattern, label in compile_banned(config.get("banned_regexes", [])):
         match = pattern.search(text)
@@ -252,9 +279,10 @@ def main() -> None:
         "",
         context_hint,
         f"Apply your style guide ({style_guide}):",
-        "  - Replace em dashes with commas, periods, colons, or parentheses.",
+        "  - Replace em and en dashes with commas, periods, colons, or parentheses.",
         "  - Remove AI tells and rewrite in a direct, committed voice.",
-        "  - Verbatim quotes from the user or a participant are the only em-dash exception.",
+        "  - Recast 'It's not X, it's Y' as a single positive claim.",
+        "  - Verbatim quotes from the user or a participant are the only dash exception.",
     ]
 
     log_block(violations, context)
