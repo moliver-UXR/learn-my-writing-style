@@ -24,9 +24,24 @@ from pathlib import Path
 CONFIG_PATH = Path.home() / ".claude" / "hooks" / "style_check_config.json"
 BLOCK_LOG_PATH = Path.home() / ".claude" / "hooks" / "style_check_blocks.log"
 
+# Capitalization checks run on prose with code and blockquote markers removed,
+# so loop variables (for i in ...), file paths, and quoted snippets don't trip
+# them. Bare "i" only matches as a standalone token; sentence starts skip a
+# configurable abbreviation set so "e.g. foo" / "i.e. bar" stay clean.
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+_INLINE_CODE_RE = re.compile(r"`[^`\n]*`")
+_BLOCKQUOTE_RE = re.compile(r"(?m)^[ \t]*>+[ \t]?")
+_LOWER_I_RE = re.compile(r"(?<![\w'/])i(['’](m|ll|ve|d|re))?(?![\w'.])")
+_SENT_START_RE = re.compile(r"[.!?][\"')\]]?\s+[a-z]")
+_PREV_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z.]*)$")
+_DEFAULT_ABBREV = ["e.g", "i.e", "etc", "vs", "cf", "al", "fig", "eq",
+                   "approx", "no", "dr", "mr", "ms", "mrs", "st"]
+
 DEFAULT_CONFIG: dict = {
     "enforce_em_dash": True,
     "enforce_en_dash": True,
+    "enforce_capitalization": True,
+    "abbreviations": _DEFAULT_ABBREV,
     "banned_regexes": [
         {"pattern": r"\bdelve\b", "flags": "i", "label": "'delve' (AI tell)"},
         {"pattern": r"\butilize\b", "flags": "i", "label": "'utilize' (use 'use')"},
@@ -56,7 +71,7 @@ DEFAULT_CONFIG: dict = {
 }
 
 CONTEXT_HINTS: dict[str, str] = {
-    "slack": "Detected Slack context. Apply the Slack layer of your style guide (casual, lowercase starts, short).",
+    "slack": "Detected Slack context. Apply the Slack layer of your style guide (casual, short, warm). Capitalize normally: sentence starts and the pronoun 'I' are always capitalized; only casual greetings/acks/interjections may start lowercase.",
     "email": "Detected email context. Apply the email layer (warm openings, sign-off if specified).",
     "long_form": "Detected long-form context. Apply the long-form layer (structured, scannable headers, citations where evidence is cited).",
     "github": "Detected GitHub context. Apply the GitHub layer: dual-audience (human newcomer + LLM intermediary), front-load what the project does and why, structured parseable sections, Michael's voice throughout.",
@@ -216,6 +231,74 @@ def detect_context(transcript_path: str, config: dict) -> str:
     return "base"
 
 
+def normalize_prose(text: str) -> str:
+    """Strip code/blockquote markers so capitalization checks see prose only.
+
+    Inline code becomes the placeholder 'Xx' (a capitalized, non-abbreviation
+    token) so a sentence that opens with `an_identifier` is not misread as a
+    lowercase start, while a real lowercase word after it still gets caught.
+    """
+    text = _FENCE_RE.sub("\n", text)
+    text = _INLINE_CODE_RE.sub(" Xx ", text)
+    text = _BLOCKQUOTE_RE.sub("", text)
+    return text
+
+
+def _cap_snippet(text: str, idx: int, before: int = 18, after: int = 26) -> str:
+    return " ".join(text[max(0, idx - before): idx + after].split())
+
+
+def collect_capitalization(text: str, abbreviations) -> list[str]:
+    """Flag lowercase sentence starts and the lowercase pronoun 'i'.
+
+    Runs on code-stripped prose, so loop variables (for i in ...), file paths,
+    and inline code are safe. Bare 'i' matches only as a standalone token; a
+    sentence start is skipped when the preceding token is a known abbreviation
+    (e.g., i.e., etc.) or a single letter. Catches the all-lowercase-casual
+    failure mode without flagging legitimate technical prose.
+    """
+    notes: list[str] = []
+    prose = normalize_prose(text)
+    abbrev = {a.lower() for a in abbreviations} if abbreviations else set(_DEFAULT_ABBREV)
+
+    # First word of each paragraph (blank-line separated), so a lowercase draft
+    # is caught even when capitalized framing or a blockquote precedes it. List,
+    # table, heading, and number leads are skipped (fragments, not sentences).
+    flagged_first = False
+    for para in re.split(r"\n\s*\n", prose):
+        for line in para.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            if s[0].isalpha() and s[0].islower():
+                notes.append(f'lowercase first word: "{_cap_snippet(s, 0, 0, 30)}"')
+                flagged_first = True
+            break
+        if flagged_first:
+            break
+
+    # Lowercase pronoun "i" (and i'm / i'll / i've / i'd / i're).
+    m = _LOWER_I_RE.search(prose)
+    if m:
+        notes.append(f'lowercase pronoun "i" (write "I"): "...{_cap_snippet(prose, m.start())}..."')
+
+    # Lowercase letter opening a sentence, minus known abbreviations on either
+    # side of the boundary ("ends in etc." before, or "i.e. opens" after).
+    for m in _SENT_START_RE.finditer(prose):
+        tok = _PREV_TOKEN_RE.search(prose[:m.start() + 1])
+        if tok:
+            t = tok.group(1).rstrip(".").lower()
+            if t in abbrev or len(t) == 1:
+                continue
+        nxt = re.match(r"[A-Za-z.]+", prose[m.end() - 1:])
+        if nxt and nxt.group(0).rstrip(".").lower() in abbrev:
+            continue
+        notes.append(f'lowercase sentence start: "...{_cap_snippet(prose, m.start())}..."')
+        break
+
+    return notes
+
+
 def collect_violations(text: str, config: dict) -> list[str]:
     """Return human-readable notes for each style violation found."""
     notes: list[str] = []
@@ -244,6 +327,9 @@ def collect_violations(text: str, config: dict) -> list[str]:
         match = pattern.search(text)
         if match:
             notes.append(f"{label}: matched '{match.group(0)}'")
+
+    if config.get("enforce_capitalization", True):
+        notes.extend(collect_capitalization(text, config.get("abbreviations")))
 
     return notes
 
@@ -282,6 +368,7 @@ def main() -> None:
         "  - Replace em and en dashes with commas, periods, colons, or parentheses.",
         "  - Remove AI tells and rewrite in a direct, committed voice.",
         "  - Recast 'It's not X, it's Y' as a single positive claim.",
+        "  - Capitalize sentence starts and the pronoun 'I' (Slack included); only casual greetings/acks may start lowercase.",
         "  - Verbatim quotes from the user or a participant are the only dash exception.",
     ]
 
