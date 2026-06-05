@@ -36,6 +36,9 @@ _SENT_START_RE = re.compile(r"[.!?][\"')\]]?\s+[a-z]")
 _PREV_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z.]*)$")
 _DEFAULT_ABBREV = ["e.g", "i.e", "etc", "vs", "cf", "al", "fig", "eq",
                    "approx", "no", "dr", "mr", "ms", "mrs", "st"]
+# A bare "i" wrapped on both sides by one of these is a single-letter mention
+# or list marker ("i", (i), [i]), not the pronoun, so it is not flagged.
+_I_MENTION_WRAP = set("\"'(){}[]") | {"‘", "’", "“", "”"}
 
 DEFAULT_CONFIG: dict = {
     "enforce_em_dash": True,
@@ -277,10 +280,16 @@ def collect_capitalization(text: str, abbreviations) -> list[str]:
         if flagged_first:
             break
 
-    # Lowercase pronoun "i" (and i'm / i'll / i've / i'd / i're).
-    m = _LOWER_I_RE.search(prose)
-    if m:
+    # Lowercase pronoun "i" (and i'm / i'll / i've / i'd / i're). A bare "i"
+    # wrapped by quotes or brackets is a mention or list marker, not a pronoun.
+    for m in _LOWER_I_RE.finditer(prose):
+        if m.group(1) is None:
+            before = prose[m.start() - 1] if m.start() else " "
+            after = prose[m.end()] if m.end() < len(prose) else " "
+            if before in _I_MENTION_WRAP and after in _I_MENTION_WRAP:
+                continue
         notes.append(f'lowercase pronoun "i" (write "I"): "...{_cap_snippet(prose, m.start())}..."')
+        break
 
     # Lowercase letter opening a sentence, minus known abbreviations on either
     # side of the boundary ("ends in etc." before, or "i.e. opens" after).
